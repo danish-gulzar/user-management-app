@@ -1,108 +1,108 @@
 # User Management App
 
-A secure, web-based user management system built with Node.js and Express.js. This application provides a complete solution for managing user accounts with authentication, role-based access control, and administrative features.
+A simple web-based user management system built with Node.js and Express.
 
-##  Features                                                                                                                                                                                                                                                                   
+## Features
 
-  - User Authentication - Registration and login with secure password hashing (bcrypt)
-  - JWT Session Management - Token-based authentication with 1-hour expiration
-  - Role-Based Access Control - First user becomes admin; admins can manage all users
-  - Admin Dashboard - Full CRUD operations for user administration
-  - Data Import/Export - Export users to JSON/CSV, import from file
-  - Security Hardening - Helmet security headers, XSS protection, input validation
+- User registration and login
+- Password hashing with bcrypt
+- JWT-based session management
+- User profile management
+- Admin dashboard for user administration
+- XSS protection via input sanitization
+- Security headers with Helmet
 
 ## Tech Stack
 
-  ┌────────────────┬──────────────────────┐
-  │    Category    │      Technology      │
-  ├────────────────┼──────────────────────┤
-  │ Backend        │ Node.js, Express.js  │
-  ├────────────────┼──────────────────────┤
-  │ Authentication │ bcrypt, jsonwebtoken │
-  ├────────────────┼──────────────────────┤
-  │ Security       │ Helmet, validator.js │
-  ├────────────────┼──────────────────────┤
-  │ Templating     │ EJS                  │
-  ├────────────────┼──────────────────────┤
-  │ Logging        │ Winston              │
-  └────────────────┴──────────────────────┘
+- **Backend:** Node.js, Express.js
+- **Authentication:** bcrypt, jsonwebtoken
+- **Security:** Helmet
+- **Templating:** EJS
+- **Validation:** validator.js
+- **Logging:** Winston
 
-Quick Start
+## Installation
 
-  # Clone and install
-  git clone <repository-url>
-  cd user-management-app-v1
-  npm install
+1. Clone the repository:
+   ```bash
+   git clone <repository-url>
+   cd user-management-app-v1
+   ```
 
-  # Configure environment
-  cp .env.example .env
-  # Edit .env and set JWT_SECRET
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
 
-  # Generate a secure JWT secret
-  node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+3. Configure environment variables:
+   ```bash
+   cp .env.example .env
+   ```
 
-  # Start server
-  node app.js
+4. Edit `.env` and set your JWT secret:
+   ```
+   JWT_SECRET=your-secure-random-string
+   ```
 
-  Visit http://localhost:3000 in your browser.
+   To generate a secure secret:
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+   ```
 
-  Project Structure
+5. Start the server:
+   ```bash
+   node app.js
+   ```
 
-  user-management-app-v1/
-  ├── app.js              # Main application (Express server, routes, auth)
-  ├── package.json        # Dependencies
-  ├── .env.example        # Environment template
-  ├── users.json          # File-based user storage
-  ├── security.log        # Security audit logs
-  ├── public/css/         # Static assets
-  └── README.md           # Documentation
+6. Open your browser and navigate to:
+   ```
+   http://localhost:3000
+   ```
 
-  API Endpoints
+## Usage
 
-  ┌────────┬───────────────────┬─────────────────────────┬───────────────┐
-  │ Method │     Endpoint      │       Description       │ Auth Required │
-  ├────────┼───────────────────┼─────────────────────────┼───────────────┤
-  │ GET    │ /                 │ Home/Dashboard          │ Yes           │
-  ├────────┼───────────────────┼─────────────────────────┼───────────────┤
-  │ GET    │ /login            │ Login page              │ No            │
-  ├────────┼───────────────────┼─────────────────────────┼───────────────┤
-  │ POST   │ /api/login        │ Authenticate user       │ No            │
-  ├────────┼───────────────────┼─────────────────────────┼───────────────┤
-  │ GET    │ /register         │ Registration page       │ No            │
-  ├────────┼───────────────────┼─────────────────────────┼───────────────┤
-  │ POST   │ /api/register     │ Create new user         │ No            │
-  ├────────┼───────────────────┼─────────────────────────┼───────────────┤
-  │ GET    │ /profile          │ User profile            │ Yes           │
-  ├────────┼───────────────────┼─────────────────────────┼───────────────┤
-  │ PUT    │ /api/profile      │ Update profile          │ Yes           │
-  ├────────┼───────────────────┼─────────────────────────┼───────────────┤
-  │ GET    │ /admin            │ Admin dashboard         │ Admin         │
-  ├────────┼───────────────────┼─────────────────────────┼───────────────┤
-  │ POST   │ /api/users        │ Create user             │ Admin         │
-  ├────────┼───────────────────┼─────────────────────────┼───────────────┤
-  │ PUT    │ /api/users/:id    │ Update user             │ Admin         │
-  ├────────┼───────────────────┼─────────────────────────┼───────────────┤
-  │ DELETE │ /api/users/:id    │ Delete user             │ Admin         │
-  ├────────┼───────────────────┼─────────────────────────┼───────────────┤
-  │ GET    │ /api/users/export │ Export users (JSON/CSV) │ Admin         │
-  ├────────┼───────────────────┼─────────────────────────┼───────────────┤
-  │ POST   │ /api/users/import │ Import users            │ Admin         │
-  ├────────┼───────────────────┼─────────────────────────┼───────────────┤
-  │ POST   │ /logout           │ Logout                  │ Yes           │
-  └────────┴───────────────────┴─────────────────────────┴───────────────┘
+### First User
+The first user registered automatically becomes an admin.
 
-  Security Features
+### Admin Features
+- View all users
+- Add new users
+- Edit user details
+- Delete users
+- Export users (JSON/CSV)
+- Import users from file
 
-  - Passwords hashed with bcrypt before storage
-  - JWT tokens with configurable expiration
-  - Input validation and sanitization (XSS prevention)
-  - Security headers via Helmet middleware
-  - Rate limiting ready (configurable)
-  - Security event logging to security.log
+### Regular User Features
+- View and edit profile
+- Change password
+- Access personal dashboard
 
-  License
+## Project Structure
 
-  ISC
+```
+user-management-app-v1/
+├── app.js              # Main application file
+├── package.json        # Dependencies
+├── .env                # Environment variables (not committed)
+├── .env.example        # Environment template
+├── .gitignore          # Git ignore rules
+├── users.json          # User data storage
+├── security.log        # Security logs
+├── public/
+│   └── css/
+│       └── style.css   # Styles
+└── README.md           # This file
+```
 
-  ---
-  Note: This is a demonstration/learning project using file-based storage (users.json). For production use, replace with a proper database (PostgreSQL, MongoDB, etc.).
+## Security Notes
+
+- Passwords are hashed using bcrypt before storage
+- JWT tokens expire after 1 hour
+- Input validation and sanitization to prevent XSS
+- Security headers via Helmet middleware
+- Never commit `.env` or `users.json` to version control
+
+## License
+
+ISC
+#
