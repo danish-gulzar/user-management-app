@@ -26,7 +26,7 @@ A simple web-based user management system built with Node.js and Express.
 1. Clone the repository:
    ```bash
    git clone https://github.com/danish-gulzar/user-management-app/
-   cd user-management-app-v1
+   cd user-management-app
    ```
 
 2. Install dependencies:
