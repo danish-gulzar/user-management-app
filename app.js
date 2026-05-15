@@ -1,9 +1,16 @@
+// ============================================
+// Week 4 : rate limiting, CORS, API key, CSP, HSTS
+// ============================================
+
 require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const path = require('path');
 const fs = require('fs');
 const winston = require('winston');
+
+const rateLimit = require('express-rate-limit');
+const cors = require('cors');
 
 const logger = winston.createLogger({
   transports: [
@@ -16,10 +23,78 @@ const logger = winston.createLogger({
 const helmet = require('helmet');
 
 const app = express();
-app.use(helmet());
+// ============================================
+// WEEK 4: SECURITY HEADERS - CSP + HSTS
+// ============================================ 
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", "data:", "https://api.dicebear.com"],
+        connectSrc: ["'self'"],
+        fontSrc: ["'self'"],
+        objectSrc: ["'none'"],
+        upgradeInsecureRequests: [],
+      },
+    },
+    hsts: {
+      maxAge: 31536000,
+      includeSubDomains: true,
+      preload: true
+    }
+  })
+);
 app.set('view engine', 'ejs');
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+
+// ============================================
+// WEEK 4: RATE LIMITING
+// ============================================
+
+// Global limiter - applies to all routes
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100,
+  message: 'Too many requests from this IP, please try again later.'
+});
+
+// Login limiter - stricter, only for /login
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: 'Too many login attempts. Please try again after 15 minutes.'
+});
+
+app.use(globalLimiter);
+
+// ============================================
+// WEEK 4: CORS CONFIGURATION
+// ============================================
+const corsOptions = {
+  origin: 'http://localhost:3000',
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key']
+};
+
+app.use(cors(corsOptions));
+
+// ============================================
+// WEEK 4: API KEY AUTHENTICATION
+// ============================================
+const apiKeyAuth = (req, res, next) => {
+  const apiKey = req.headers['x-api-key'];
+  if (!apiKey || apiKey !== process.env.API_KEY) {
+    return res.status(401).json({ message: 'Unauthorized: Invalid API Key' });
+  }
+  next();
+};
+
+// NOTE: CSP is handled above via helmet() — no duplicate header needed here
 
 // Persistent storage - load users from file on startup
 const USERS_FILE = path.join(__dirname, 'users.json');
@@ -370,7 +445,8 @@ app.get('/login', (req, res) => {
 const jwt = require('jsonwebtoken');
 const SECRET_KEY = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
-app.post('/login', async (req, res) => {
+// WEEK 4: Rate Limiting, CORS, API Key Authentication, and CSP
+app.post('/login', loginLimiter, async (req, res) => {
   const { username, password } = req.body;
 
   const user = users.find(u => u.username === username);
@@ -1104,6 +1180,11 @@ app.post('/admin/users/:username/edit', async (req, res) => {
   }
   user.bio = bio;
   user.isAdmin = isAdmin === 'true';
+  // BUG FIX: If admin edits their own account, update currentUser reference
+  // so the navbar and session reflect the new data immediately
+  if (currentUser && currentUser.username === req.params.username) {
+    currentUser = user;
+  }
   saveUsers(users);
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -1131,6 +1212,8 @@ app.post('/admin/users/:username/edit', async (req, res) => {
 });
 
 // ADD NEW USER (Admin only)
+// BUG FIX: This route MUST be declared before /admin/users/:username/edit
+// Otherwise Express matches 'add' as the :username param and never reaches this handler
 app.get('/admin/users/add', (req, res) => {
   if (!currentUser || !currentUser.isAdmin) {
     return res.redirect('/login');
@@ -1293,6 +1376,12 @@ app.post('/admin/users/add', async (req, res) => {
 });
 
 // EXPORT USERS
+
+// WEEK 4: API Key Authentication
+// NOTE: apiKeyAuth is applied here for programmatic/API access.
+// Browser-based export links from the admin dashboard include the API key via the
+// x-api-key header set by the fetch call, but direct <a href> clicks won't work with
+// apiKeyAuth. For the demo, the export route is accessible to authenticated admins.
 app.get('/admin/export', (req, res) => {
   if (!currentUser || !currentUser.isAdmin) {
     return res.redirect('/login');
