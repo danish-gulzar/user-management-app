@@ -1,4 +1,4 @@
-# Week 4 — Advanced Threat Detection & Web Security Hardening
+# Week 4 — API Security Hardening & Web Security Headers
 
 ---
 
@@ -7,9 +7,8 @@
 - [Overview](#overview)
 - [Goals](#goals)
 - [Tools & Technologies](#tools--technologies)
-- [Task 1 — Intrusion Detection & Monitoring](#task-1--intrusion-detection--monitoring)
-- [Task 2 — API Security Hardening](#task-2--api-security-hardening)
-- [Task 3 — Security Headers & CSP](#task-3--security-headers--csp)
+- [Task 1 — API Security Hardening](#task-1--api-security-hardening)
+- [Task 2 — Security Headers & CSP](#task-2--security-headers--csp)
 - [Testing & Verification](#testing--verification)
 - [Deliverables Checklist](#deliverables-checklist)
 - [Folder Structure](#folder-structure)
@@ -24,7 +23,6 @@ This branch builds upon the Week 1–3 security foundation by implementing advan
 
 ## Goals
 
-- Set up real-time intrusion detection and alerting
 - Harden API endpoints against brute-force and unauthorized access
 - Implement industry-standard security headers
 - Enforce strict Content Security Policy (CSP)
@@ -34,150 +32,18 @@ This branch builds upon the Week 1–3 security foundation by implementing advan
 
 ## Tools & Technologies
 
-| Tool / Library       | Purpose                                  | Environment   |
-| -------------------- | ---------------------------------------- | ------------- |
-| Fail2Ban             | Intrusion detection & IP banning         | Kali Linux VM |
-| `express-rate-limit` | API rate limiting                        | Node.js       |
-| `cors`               | Cross-Origin Resource Sharing control    | Node.js       |
-| `helmet`             | Security headers (CSP, HSTS, etc.)       | Node.js       |
-| `dotenv`             | Environment variable management          | Node.js       |
-| `winston`            | Security logging for Fail2Ban monitoring | Node.js       |
-| Kali Linux VM        | Security testing environment             | VM            |
-| curl                 | Header verification                      | Kali Linux VM |
+| Tool / Library       | Purpose                               | Environment   |
+| -------------------- | ------------------------------------- | ------------- |
+| `express-rate-limit` | API rate limiting                     | Node.js       |
+| `cors`               | Cross-Origin Resource Sharing control | Node.js       |
+| `helmet`             | Security headers (CSP, HSTS, etc.)   | Node.js       |
+| `dotenv`             | Environment variable management       | Node.js       |
+| Kali Linux VM        | Security testing environment          | VM            |
+| curl                 | Header verification                   | Kali Linux VM |
 
 ---
 
-## Task 1 — Intrusion Detection & Monitoring
-
-### What Was Implemented
-
-Real-time intrusion detection was configured using **Fail2Ban** on a Kali Linux VM. Two jails were configured — one for SSH brute-force protection and one for monitoring the Node.js application's failed login attempts.
-
----
-
-### 1.1 — Fail2Ban Installation
-
-```bash
-sudo apt update
-sudo apt install fail2ban -y
-sudo systemctl start fail2ban
-sudo systemctl enable fail2ban
-sudo systemctl status fail2ban
-```
-
----
-
-### 1.2 — SSH Brute-Force Jail Configuration
-
-A local config was created to avoid editing the original:
-
-```bash
-sudo cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
-sudo nano /etc/fail2ban/jail.local
-```
-
-The `[sshd]` section was configured as follows:
-
-```ini
-[sshd]
-enabled  = true
-port     = ssh
-maxretry = 3
-findtime = 300
-bantime  = 3600
-```
-
-| Parameter  | Value | Meaning                        |
-| ---------- | ----- | ------------------------------ |
-| `maxretry` | 3     | Max failed attempts before ban |
-| `findtime` | 300   | Time window (5 minutes)        |
-| `bantime`  | 3600  | Ban duration (1 hour)          |
-
----
-
-### 1.3 — Node.js App Login Monitoring
-
-Failed login attempts in the Node.js app are written to `logs/security.log` via `winston`:
-
-```javascript
-// In app.post('/login')
-if (!user) {
-  logger.warn(
-    `Failed login attempt - invalid username: ${username} from IP: ${req.ip}`,
-  );
-  return res.status(401).send("Invalid credentials");
-}
-
-const match = await bcrypt.compare(password, user.password);
-if (!match) {
-  logger.warn(
-    `Failed login attempt - wrong password for: ${username} from IP: ${req.ip}`,
-  );
-  return res.status(401).send("Invalid credentials");
-}
-```
-
----
-
-### 1.4 — Custom Fail2Ban Filter for Node.js
-
-Created at `/etc/fail2ban/filter.d/nodejs-auth.conf`:
-
-```ini
-[Definition]
-failregex = Failed login attempt .* from IP: <HOST>
-ignoreregex =
-```
-
----
-
-### 1.5 — Custom Jail for Node.js App
-
-Added to `/etc/fail2ban/jail.local`:
-
-```ini
-[nodejs-auth]
-enabled  = true
-port     = 3000
-filter   = nodejs-auth
-logpath  = /home/kali/user-management-app/logs/security.log
-maxretry = 3
-findtime = 300
-bantime  = 3600
-action   = iptables-multiport[name=nodejs, port="3000", protocol=tcp]
-           sendmail-whois[name=nodejs-auth, dest=your@email.com, sender=fail2ban@kali]
-```
-
----
-
-### 1.6 — Verification
-
-```bash
-sudo systemctl restart fail2ban
-
-# Check both jails are active
-sudo fail2ban-client status
-
-# Check Node.js jail specifically
-sudo fail2ban-client status nodejs-auth
-```
-
-After triggering 3+ failed logins, the attacking IP appeared in the banned list:
-
-```bash
-sudo fail2ban-client status nodejs-auth
-# Output shows IP under "Banned IP list"
-```
-
-To unban after testing:
-
-```bash
-sudo fail2ban-client set nodejs-auth unbanip 127.0.0.1
-```
-
----
-
-## Task 2 — API Security Hardening
+## Task 1 — API Security Hardening
 
 ### What Was Implemented
 
@@ -185,7 +51,7 @@ Three layers of API security were added to the Node.js/Express application — r
 
 ---
 
-### 2.1 — Package Installation
+### 1.1 — Package Installation
 
 ```bash
 npm install express-rate-limit cors dotenv
@@ -193,7 +59,7 @@ npm install express-rate-limit cors dotenv
 
 ---
 
-### 2.2 — Rate Limiting
+### 1.2 — Rate Limiting
 
 Two rate limiters were implemented — a global limiter for all routes and a strict limiter specifically for the login endpoint.
 
@@ -232,7 +98,7 @@ app.post("/login", loginLimiter, async (req, res) => {
 
 ---
 
-### 2.3 — CORS Configuration
+### 1.3 — CORS Configuration
 
 CORS was restricted to the application's own origin, preventing unauthorized cross-origin requests:
 
@@ -250,7 +116,7 @@ app.use(cors(corsOptions));
 
 ---
 
-### 2.4 — API Key Authentication
+### 1.4 — API Key Authentication
 
 An API key middleware was implemented to protect sensitive endpoints. The key is stored in a `.env` file and never hardcoded.
 
@@ -289,7 +155,7 @@ logs/
 
 ---
 
-## Task 3 — Security Headers & CSP
+## Task 2 — Security Headers & CSP
 
 ### What Was Implemented
 
@@ -297,7 +163,7 @@ logs/
 
 ---
 
-### 3.1 — Helmet.js Full Configuration
+### 2.1 — Helmet.js Full Configuration
 
 The basic `app.use(helmet())` was replaced with explicit configuration:
 
@@ -334,7 +200,7 @@ app.use(
 
 ---
 
-### 3.2 — Security Headers Applied
+### 2.2 — Security Headers Applied
 
 | Header                      | Value                | Protection Against       |
 | --------------------------- | -------------------- | ------------------------ |
@@ -411,24 +277,8 @@ curl -H "x-api-key: your-secret-api-key-here" http://localhost:3000/admin/export
 
 ---
 
-### Fail2Ban Verification
-
-After 3 failed logins, IP was banned:
-
-```bash
-sudo fail2ban-client status nodejs-auth
-# Banned IP list: 127.0.0.1
-```
-
----
-
 ## Deliverables Checklist
 
-- [x] Fail2Ban installed and running on Kali Linux VM
-- [x] SSH brute-force jail configured (`maxretry=3, bantime=1hr`)
-- [x] Custom Fail2Ban filter for Node.js app login failures
-- [x] Custom Fail2Ban jail monitoring `logs/security.log`
-- [x] Alert action configured for banned IPs
 - [x] Global rate limiter applied (100 req / 15 min)
 - [x] Login-specific rate limiter applied (5 req / 15 min)
 - [x] CORS restricted to `localhost:3000`
@@ -447,13 +297,11 @@ sudo fail2ban-client status nodejs-auth
 
 ```
 user-management-app/
-├── app.js                  ← Main application with all Week 4 security
-├── .env                    ← API keys and secrets (NOT in GitHub)
-├── .gitignore              ← Excludes .env, node_modules, logs
+├── app.js          ← Main application with all Week 4 security
+├── .env            ← API keys and secrets (NOT in GitHub)
+├── .gitignore      ← Excludes .env, node_modules, logs
 ├── package.json
-├── logs/
-│   └── security.log        ← Winston log file monitored by Fail2Ban
-└── README.md               ← This file
+└── README.md       ← This file
 ```
 
 ---
@@ -463,8 +311,6 @@ user-management-app/
 > **JWT Token:** JWT is generated on login but route-level authentication currently uses a server-side `currentUser` variable. This is a known limitation documented for future improvement. API key authentication has been applied to sensitive admin endpoints as a compensating control.
 
 > **HTTPS:** HSTS header is configured and active. Full HTTPS enforcement requires an SSL certificate which is outside the scope of the local development environment used in this internship.
-
-> **Fail2Ban Scope:** Fail2Ban is deployed on the Kali Linux VM where the Node.js app is running during security testing. In a production deployment, it would be installed on the application server itself.
 
 ---
 
