@@ -1,7 +1,3 @@
-// ============================================
-// Week 4 : rate limiting, CORS, API key, CSP, HSTS
-// ============================================
-
 require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -23,9 +19,6 @@ const logger = winston.createLogger({
 const helmet = require('helmet');
 
 const app = express();
-// ============================================
-// WEEK 4: SECURITY HEADERS - CSP + HSTS
-// ============================================ 
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -48,13 +41,26 @@ app.use(
   })
 );
 app.set('view engine', 'ejs');
+
+// ============================================
+// WEEK 5: CSRF PROTECTION
+// ============================================
+// Cross-Site Request Forgery (CSRF) protection using csurf middleware (Week 5 task).
+// Double-submit cookie pattern: csurf stores a secret in the _csrf cookie; every
+// state-changing POST must include a matching token in the form body or request header.
+// Test with Burp Suite by attempting forged requests without a valid token.
+const cookieParser = require('cookie-parser');
+const csrf = require('csurf');
+
+app.use(cookieParser());
 app.use(bodyParser.urlencoded({ extended: true }));
+app.use(csrf({ cookie: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-
-// ============================================
-// WEEK 4: RATE LIMITING
-// ============================================
+// WEEK 5: Embed hidden _csrf field in HTML forms served to the browser
+function getCsrfField(req) {
+  return `<input type="hidden" name="_csrf" value="${req.csrfToken()}">`;
+}
 
 // Global limiter - applies to all routes
 const globalLimiter = rateLimit({
@@ -72,9 +78,6 @@ const loginLimiter = rateLimit({
 
 app.use(globalLimiter);
 
-// ============================================
-// WEEK 4: CORS CONFIGURATION
-// ============================================
 const corsOptions = {
   origin: 'http://localhost:3000',
   methods: ['GET', 'POST'],
@@ -83,9 +86,6 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// ============================================
-// WEEK 4: API KEY AUTHENTICATION
-// ============================================
 const apiKeyAuth = (req, res, next) => {
   const apiKey = req.headers['x-api-key'];
   if (!apiKey || apiKey !== process.env.API_KEY) {
@@ -312,6 +312,7 @@ app.get('/register', (req, res) => {
     <div class="card">
       <h2>Create Account</h2>
       <form method="POST" action="/register">
+        ${getCsrfField(req)}
         <div class="form-group">
           <label for="email">Email</label>
           <input type="email" id="email" name="email" required>
@@ -346,6 +347,7 @@ app.get('/register', (req, res) => {
 const bcrypt = require('bcrypt');
 const validator = require('validator');
 
+// WEEK 5: csurf validates the _csrf token before this handler runs
 app.post('/register', async (req, res) => {
   const { email, username, password, bio } = req.body;
 
@@ -422,6 +424,7 @@ app.get('/login', (req, res) => {
     <div class="card">
       <h2>Login</h2>
       <form method="POST" action="/login">
+        ${getCsrfField(req)}
         <div class="form-group">
           <label for="username">Username</label>
           <input type="text" id="username" name="username" required>
@@ -445,7 +448,7 @@ app.get('/login', (req, res) => {
 const jwt = require('jsonwebtoken');
 const SECRET_KEY = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
-// WEEK 4: Rate Limiting, CORS, API Key Authentication, and CSP
+// WEEK 5: csurf validates the _csrf token before this handler runs
 app.post('/login', loginLimiter, async (req, res) => {
   const { username, password } = req.body;
 
@@ -660,6 +663,7 @@ app.get('/profile/edit', (req, res) => {
     <div class="card">
       <h2>Edit Profile</h2>
       <form method="POST" action="/profile/edit">
+        ${getCsrfField(req)}
         <div class="form-group">
           <label for="email">Email</label>
           <input type="email" id="email" name="email" value="${currentUser.email}" required>
@@ -730,6 +734,7 @@ app.get('/password/change', (req, res) => {
     <div class="card">
       <h2>Change Password</h2>
       <form method="POST" action="/password/change">
+        ${getCsrfField(req)}
         <div class="form-group">
           <label for="currentPassword">Current Password</label>
           <input type="password" id="currentPassword" name="currentPassword" required>
@@ -870,6 +875,7 @@ app.get('/admin', (req, res) => {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Admin Dashboard</title>
   <link rel="stylesheet" href="/css/style.css">
+  <meta name="csrf-token" content="${req.csrfToken()}">
 </head>
 <body>
   ${getNavbar()}
@@ -961,7 +967,12 @@ function importUsers(input) {
   if (!file) return;
   const formData = new FormData();
   formData.append('file', file);
-  fetch('/admin/import', { method: 'POST', body: formData })
+  const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
+  fetch('/admin/import', {
+    method: 'POST',
+    headers: { 'x-csrf-token': csrfToken },
+    body: formData
+  })
     .then(r => r.text())
     .then(html => { document.open(); document.write(html); document.close(); })
     .catch(e => alert('Import failed: ' + e));
@@ -1021,6 +1032,7 @@ app.get('/admin/users/:username/delete', (req, res) => {
         </div>
         <p style="color: #ef4444; font-size: 0.9rem;">This action cannot be undone.</p>
         <form method="POST" action="/admin/users/${user.username}/delete" style="margin-top: 25px;">
+          ${getCsrfField(req)}
           <div class="form-actions">
             <button type="submit" class="btn btn-danger">Yes, Delete User</button>
             <a href="/admin" class="btn btn-secondary">Cancel</a>
@@ -1108,6 +1120,7 @@ app.get('/admin/users/:username/edit', (req, res) => {
       <div class="card">
         <h2>Edit User: ${user.username}</h2>
         <form method="POST" action="/admin/users/${user.username}/edit">
+          ${getCsrfField(req)}
           <div class="form-row">
             <div class="form-group">
               <label for="username">Username</label>
@@ -1233,6 +1246,7 @@ app.get('/admin/users/add', (req, res) => {
       <div class="card">
         <h2>Add New User</h2>
         <form method="POST" action="/admin/users/add">
+          ${getCsrfField(req)}
           <div class="form-row">
             <div class="form-group">
               <label for="username">Username *</label>
@@ -1377,7 +1391,6 @@ app.post('/admin/users/add', async (req, res) => {
 
 // EXPORT USERS
 
-// WEEK 4: API Key Authentication
 // NOTE: apiKeyAuth is applied here for programmatic/API access.
 // Browser-based export links from the admin dashboard include the API key via the
 // x-api-key header set by the fetch call, but direct <a href> clicks won't work with
@@ -1400,6 +1413,7 @@ app.get('/admin/export', (req, res) => {
 });
 
 // IMPORT USERS
+// WEEK 5: AJAX import sends x-csrf-token header (see admin dashboard importUsers script)
 app.post('/admin/import', (req, res) => {
   if (!currentUser || !currentUser.isAdmin) {
     return res.redirect('/login');
@@ -1545,6 +1559,7 @@ app.get('/admin/reset-all', (req, res) => {
         </div>
         <p style="color: #ef4444; font-size: 0.9rem;">This action cannot be undone. All data will be lost.</p>
         <form method="POST" action="/admin/reset-all" style="margin-top: 25px;">
+          ${getCsrfField(req)}
           <div class="form-actions">
             <button type="submit" class="btn btn-danger">Yes, Reset All Users</button>
             <a href="/admin" class="btn btn-secondary">Cancel</a>
@@ -1583,6 +1598,34 @@ app.post('/admin/reset-all', (req, res) => {
           <a href="/" class="btn btn-primary">Back to Home</a>
           <a href="/register" class="btn btn-secondary">Create First User</a>
         </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`);
+});
+
+// WEEK 5: Reject forged requests when CSRF token is missing or invalid
+app.use((err, req, res, next) => {
+  if (err.code !== 'EBADCSRFTOKEN') {
+    return next(err);
+  }
+  logger.warn('CSRF token validation failed', { path: req.path, ip: req.ip });
+  res.status(403).send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Forbidden</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  ${getNavbar()}
+  <div class="container" style="margin-top: 80px;">
+    <div class="card">
+      <div class="message error">Invalid or missing CSRF token. This request was blocked to prevent cross-site request forgery.</div>
+      <div class="links" style="margin-top: 20px;">
+        <a href="/" class="btn btn-primary">Back to Home</a>
       </div>
     </div>
   </div>

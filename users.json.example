@@ -1,0 +1,11 @@
+[
+  {
+    "email": "demo@example.com",
+    "username": "demo",
+    "password": "$2b$10$REPLACE_WITH_BCRYPT_HASH",
+    "bio": "Demo user — register via /register or replace this file with users.json",
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "lastLogin": null,
+    "isAdmin": true
+  }
+]

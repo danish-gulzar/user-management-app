@@ -1,4 +1,4 @@
-# Week 4 — Advanced Threat Detection & Web Security Hardening
+# Week 5 — Ethical Hacking & Exploiting Vulnerabilities
 
 ---
 
@@ -7,9 +7,10 @@
 - [Overview](#overview)
 - [Goals](#goals)
 - [Tools & Technologies](#tools--technologies)
-- [Task 1 — Intrusion Detection & Monitoring](#task-1--intrusion-detection--monitoring)
-- [Task 2 — API Security Hardening](#task-2--api-security-hardening)
-- [Task 3 — Security Headers & CSP](#task-3--security-headers--csp)
+- [Prerequisites (Week 4)](#prerequisites-week-4)
+- [Task 1 — Ethical Hacking Basics](#task-1--ethical-hacking-basics)
+- [Task 2 — SQL Injection & Exploitation](#task-2--sql-injection--exploitation)
+- [Task 3 — Cross-Site Request Forgery (CSRF) Protection](#task-3--cross-site-request-forgery-csrf-protection)
 - [Testing & Verification](#testing--verification)
 - [Deliverables Checklist](#deliverables-checklist)
 - [Folder Structure](#folder-structure)
@@ -18,428 +19,297 @@
 
 ## Overview
 
-This branch builds upon the Week 1–3 security foundation by implementing advanced defensive security measures on the User Management Application. The focus shifts from identifying vulnerabilities to actively hardening the application against real-world attack vectors including brute-force attacks, unauthorized API access, cross-site scripting, and protocol downgrade attacks.
+Week 5 focuses on ethical hacking techniques in a controlled lab environment and applying defensive fixes to the User Management Application. Building on the Week 4 hardening (rate limiting, CORS, API keys, CSP, HSTS, Fail2Ban), this week adds **CSRF protection** using the `csurf` middleware and documents reconnaissance, SQL injection testing, and Burp Suite workflows required by the internship deliverables.
 
 ---
 
 ## Goals
 
-- Set up real-time intrusion detection and alerting
-- Harden API endpoints against brute-force and unauthorized access
-- Implement industry-standard security headers
-- Enforce strict Content Security Policy (CSP)
-- Force HTTPS via HTTP Strict Transport Security (HSTS)
+- Conduct reconnaissance on the test application using a penetration testing toolkit (Kali Linux)
+- Identify and document SQL injection risks (or confirm absence of SQL attack surface)
+- Implement **CSRF protection** with `csurf` and `cookie-parser`
+- Test forged requests using **Burp Suite** and verify they are blocked
 
 ---
 
 ## Tools & Technologies
 
-| Tool / Library       | Purpose                                  | Environment   |
-| -------------------- | ---------------------------------------- | ------------- |
-| Fail2Ban             | Intrusion detection & IP banning         | Kali Linux VM |
-| `express-rate-limit` | API rate limiting                        | Node.js       |
-| `cors`               | Cross-Origin Resource Sharing control    | Node.js       |
-| `helmet`             | Security headers (CSP, HSTS, etc.)       | Node.js       |
-| `dotenv`             | Environment variable management          | Node.js       |
-| `winston`            | Security logging for Fail2Ban monitoring | Node.js       |
-| Kali Linux VM        | Security testing environment             | VM            |
-| curl                 | Header verification                      | Kali Linux VM |
+| Tool / Library   | Purpose                                      | Environment   |
+| ---------------- | -------------------------------------------- | ------------- |
+| Kali Linux       | Penetration testing & ethical hacking lab    | VM            |
+| Burp Suite       | Intercept/replay requests; CSRF testing        | Kali / host   |
+| SQLMap           | Automated SQL injection detection              | Kali Linux VM |
+| `csurf`          | CSRF token validation (Week 5 task)          | Node.js       |
+| `cookie-parser`  | Cookie parsing (required by `csurf`)         | Node.js       |
+| `express`        | Web application framework                    | Node.js       |
+| `bcrypt`         | Password hashing (Week 1–3 fix)              | Node.js       |
+| `validator`      | Input validation & XSS sanitization          | Node.js       |
 
 ---
 
-## Task 1 — Intrusion Detection & Monitoring
+## Prerequisites (Week 4)
 
-### What Was Implemented
+The following defenses from Week 4 remain active in `app.js`:
 
-Real-time intrusion detection was configured using **Fail2Ban** on a Kali Linux VM. Two jails were configured — one for SSH brute-force protection and one for monitoring the Node.js application's failed login attempts.
+- Fail2Ban monitoring of `security.log` for failed logins
+- Global and login rate limiting (`express-rate-limit`)
+- CORS restricted to `http://localhost:3000`
+- API key middleware for sensitive endpoints
+- CSP and HSTS via `helmet`
+
+See git history on branch `week4-6-security` for the full Week 4 README content.
 
 ---
 
-### 1.1 — Fail2Ban Installation
+## Task 1 — Ethical Hacking Basics
+
+### What to Do
+
+Use **Kali Linux** (or your preferred toolkit) to perform reconnaissance on the running application:
 
 ```bash
-sudo apt update
-sudo apt install fail2ban -y
-sudo systemctl start fail2ban
-sudo systemctl enable fail2ban
-sudo systemctl status fail2ban
+# Start the app (on Windows host or Kali VM)
+node app.js
+# App runs at http://localhost:3000
 ```
 
----
-
-### 1.2 — SSH Brute-Force Jail Configuration
-
-A local config was created to avoid editing the original:
+Example reconnaissance steps:
 
 ```bash
-sudo cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
-sudo nano /etc/fail2ban/jail.local
+# Service / port check
+nmap -sV localhost -p 3000
+
+# HTTP headers and server fingerprint
+curl -I http://localhost:3000
+
+# Directory enumeration (optional)
+gobuster dir -u http://localhost:3000 -w /usr/share/wordlists/dirb/common.txt
 ```
 
-The `[sshd]` section was configured as follows:
+Document in your **ethical hacking report**:
 
-```ini
-[sshd]
-enabled  = true
-port     = ssh
-maxretry = 3
-findtime = 300
-bantime  = 3600
-```
-
-| Parameter  | Value | Meaning                        |
-| ---------- | ----- | ------------------------------ |
-| `maxretry` | 3     | Max failed attempts before ban |
-| `findtime` | 300   | Time window (5 minutes)        |
-| `bantime`  | 3600  | Ban duration (1 hour)          |
+- Open ports and services
+- HTTP security headers observed (CSP, HSTS, etc.)
+- Public routes discovered (`/login`, `/register`, `/admin`, etc.)
+- Authentication mechanism (session via `currentUser` + JWT on login)
 
 ---
 
-### 1.3 — Node.js App Login Monitoring
+## Task 2 — SQL Injection & Exploitation
 
-Failed login attempts in the Node.js app are written to `logs/security.log` via `winston`:
+### Application Note
 
-```javascript
-// In app.post('/login')
-if (!user) {
-  logger.warn(
-    `Failed login attempt - invalid username: ${username} from IP: ${req.ip}`,
-  );
-  return res.status(401).send("Invalid credentials");
-}
+This application stores users in **`users.json`** (file-based persistence), not a SQL database. There are **no raw SQL queries** in the backend, so classic SQL injection against the app logic is **not applicable**.
 
-const match = await bcrypt.compare(password, user.password);
-if (!match) {
-  logger.warn(
-    `Failed login attempt - wrong password for: ${username} from IP: ${req.ip}`,
-  );
-  return res.status(401).send("Invalid credentials");
-}
-```
+### SQLMap (Lab Exercise)
 
----
-
-### 1.4 — Custom Fail2Ban Filter for Node.js
-
-Created at `/etc/fail2ban/filter.d/nodejs-auth.conf`:
-
-```ini
-[Definition]
-failregex = Failed login attempt .* from IP: <HOST>
-ignoreregex =
-```
-
----
-
-### 1.5 — Custom Jail for Node.js App
-
-Added to `/etc/fail2ban/jail.local`:
-
-```ini
-[nodejs-auth]
-enabled  = true
-port     = 3000
-filter   = nodejs-auth
-logpath  = /home/kali/user-management-app/logs/security.log
-maxretry = 3
-findtime = 300
-bantime  = 3600
-action   = iptables-multiport[name=nodejs, port="3000", protocol=tcp]
-           sendmail-whois[name=nodejs-auth, dest=your@email.com, sender=fail2ban@kali]
-```
-
----
-
-### 1.6 — Verification
+You can still run SQLMap against login/register endpoints to confirm no SQL backend is exposed:
 
 ```bash
-sudo systemctl restart fail2ban
-
-# Check both jails are active
-sudo fail2ban-client status
-
-# Check Node.js jail specifically
-sudo fail2ban-client status nodejs-auth
+sqlmap -u "http://localhost:3000/login" --data="username=test&password=test" --batch
 ```
 
-After triggering 3+ failed logins, the attacking IP appeared in the banned list:
+Expected outcome: no injectable SQL parameters (file/JSON storage only).
 
-```bash
-sudo fail2ban-client status nodejs-auth
-# Output shows IP under "Banned IP list"
-```
+### Prepared Statements (Best Practice)
 
-To unban after testing:
-
-```bash
-sudo fail2ban-client set nodejs-auth unbanip 127.0.0.1
-```
-
----
-
-## Task 2 — API Security Hardening
-
-### What Was Implemented
-
-Three layers of API security were added to the Node.js/Express application — rate limiting to prevent brute-force attacks, CORS configuration to restrict unauthorized cross-origin access, and API key authentication to protect sensitive endpoints.
-
----
-
-### 2.1 — Package Installation
-
-```bash
-npm install express-rate-limit cors dotenv
-```
-
----
-
-### 2.2 — Rate Limiting
-
-Two rate limiters were implemented — a global limiter for all routes and a strict limiter specifically for the login endpoint.
+If a SQL database is added later, use **parameterized queries** — never concatenate user input into SQL:
 
 ```javascript
-const rateLimit = require("express-rate-limit");
-
-// Global limiter — all routes
-const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
-  message: "Too many requests from this IP, please try again later.",
-});
-
-// Login limiter — strict, login route only
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  message: "Too many login attempts. Please try again after 15 minutes.",
-});
-
-app.use(globalLimiter);
-```
-
-Applied to the login route:
-
-```javascript
-app.post("/login", loginLimiter, async (req, res) => {
-  // login logic
-});
-```
-
-| Limiter | Window | Max Requests | Applied To    |
-| ------- | ------ | ------------ | ------------- |
-| Global  | 15 min | 100          | All routes    |
-| Login   | 15 min | 5            | `/login` only |
-
----
-
-### 2.3 — CORS Configuration
-
-CORS was restricted to the application's own origin, preventing unauthorized cross-origin requests:
-
-```javascript
-const cors = require("cors");
-
-const corsOptions = {
-  origin: "http://localhost:3000",
-  methods: ["GET", "POST"],
-  allowedHeaders: ["Content-Type", "Authorization", "x-api-key"],
-};
-
-app.use(cors(corsOptions));
-```
-
----
-
-### 2.4 — API Key Authentication
-
-An API key middleware was implemented to protect sensitive endpoints. The key is stored in a `.env` file and never hardcoded.
-
-```javascript
-const apiKeyAuth = (req, res, next) => {
-  const apiKey = req.headers["x-api-key"];
-  if (!apiKey || apiKey !== process.env.API_KEY) {
-    return res.status(401).json({ message: "Unauthorized: Invalid API Key" });
-  }
-  next();
-};
-```
-
-Applied to the admin export endpoint:
-
-```javascript
-app.get("/admin/export", apiKeyAuth, (req, res) => {
-  // export logic
-});
-```
-
-`.env` file (not committed to GitHub):
-
-```
-JWT_SECRET=your-secret-key-change-in-production
-API_KEY=your-secret-api-key-here
-```
-
-`.gitignore` updated:
-
-```
-.env
-node_modules/
-logs/
-```
-
----
-
-## Task 3 — Security Headers & CSP
-
-### What Was Implemented
-
-`helmet.js` was configured explicitly to apply a strict Content Security Policy (CSP) and HTTP Strict Transport Security (HSTS), along with other security headers that protect against common web attack vectors.
-
----
-
-### 3.1 — Helmet.js Full Configuration
-
-The basic `app.use(helmet())` was replaced with explicit configuration:
-
-```javascript
-const helmet = require("helmet");
-
-// Base helmet — applies X-Frame-Options, X-Content-Type-Options, etc.
-app.use(helmet());
-
-// Content Security Policy — prevents XSS and script injection
-app.use(
-  helmet.contentSecurityPolicy({
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", "data:"],
-      connectSrc: ["'self'"],
-      objectSrc: ["'none'"],
-      upgradeInsecureRequests: [],
-    },
-  }),
+// SAFE — parameterized query (example for future MySQL/PostgreSQL integration)
+const [rows] = await db.execute(
+  'SELECT * FROM users WHERE username = ?',
+  [username]
 );
 
-// HSTS — forces HTTPS for 1 year
-app.use(
-  helmet.hsts({
-    maxAge: 31536000,
-    includeSubDomains: true,
-    preload: true,
-  }),
-);
+// UNSAFE — never do this
+// const query = `SELECT * FROM users WHERE username = '${username}'`;
 ```
 
 ---
 
-### 3.2 — Security Headers Applied
+## Task 3 — Cross-Site Request Forgery (CSRF) Protection
 
-| Header                      | Value                | Protection Against       |
-| --------------------------- | -------------------- | ------------------------ |
-| `Content-Security-Policy`   | `default-src 'self'` | XSS, script injection    |
-| `Strict-Transport-Security` | `max-age=31536000`   | Protocol downgrade, MITM |
-| `X-Frame-Options`           | `SAMEORIGIN`         | Clickjacking             |
-| `X-Content-Type-Options`    | `nosniff`            | MIME sniffing attacks    |
-| `X-DNS-Prefetch-Control`    | `off`                | Information leakage      |
-| `Referrer-Policy`           | `no-referrer`        | Referrer leakage         |
+### What Was Implemented
+
+**CSRF protection** was added using the **`csurf`** middleware with the **double-submit cookie** pattern (`cookie: true`). Every state-changing `POST` request must include a token that matches the secret stored in the `_csrf` cookie.
 
 ---
 
-### CSP Directive Breakdown
+### 3.1 — Package Installation
 
-| Directive                 | Value                    | Meaning                                   |
-| ------------------------- | ------------------------ | ----------------------------------------- |
-| `defaultSrc`              | `'self'`                 | Only allow resources from same origin     |
-| `scriptSrc`               | `'self'`                 | No inline scripts, no external scripts    |
-| `styleSrc`                | `'self' 'unsafe-inline'` | Allow inline styles (required for app UI) |
-| `imgSrc`                  | `'self' data:`           | Images from same origin + base64          |
-| `objectSrc`               | `'none'`                 | Block all plugins (Flash, etc.)           |
-| `upgradeInsecureRequests` | —                        | Auto-upgrade HTTP to HTTPS                |
+```bash
+npm install csurf cookie-parser
+```
+
+Dependencies are listed in `package.json`:
+
+- `csurf` — CSRF middleware (archived but required by the Week 5 task spec)
+- `cookie-parser` — parses cookies so `csurf` can read/write the CSRF secret
+
+---
+
+### 3.2 — Middleware Setup
+
+Middleware order in `app.js`:
+
+1. `cookieParser()`
+2. `bodyParser.urlencoded()`
+3. `csrf({ cookie: true })`
+
+```javascript
+const cookieParser = require('cookie-parser');
+const csrf = require('csurf');
+
+app.use(cookieParser());
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(csrf({ cookie: true }));
+```
+
+---
+
+### 3.3 — CSRF Token in HTML Forms
+
+A helper embeds a hidden field on every form served to the browser:
+
+```javascript
+function getCsrfField(req) {
+  return `<input type="hidden" name="_csrf" value="${req.csrfToken()}">`;
+}
+```
+
+Protected forms include:
+
+| Route | Method | Purpose |
+| ----- | ------ | ------- |
+| `/register` | POST | User registration |
+| `/login` | POST | Authentication |
+| `/profile/edit` | POST | Profile update |
+| `/password/change` | POST | Password change |
+| `/admin/users/:username/delete` | POST | Delete user |
+| `/admin/users/:username/edit` | POST | Edit user |
+| `/admin/users/add` | POST | Add user |
+| `/admin/reset-all` | POST | Reset all users |
+
+Example in a form template:
+
+```html
+<form method="POST" action="/login">
+  <input type="hidden" name="_csrf" value="TOKEN_FROM_req.csrfToken()" />
+  <!-- other fields -->
+</form>
+```
+
+---
+
+### 3.4 — CSRF Token for AJAX (Import Users)
+
+The admin dashboard file import uses `fetch()` with a token in the **`x-csrf-token`** header (supported by `csurf`):
+
+```html
+<meta name="csrf-token" content="${req.csrfToken()}">
+```
+
+```javascript
+const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
+fetch('/admin/import', {
+  method: 'POST',
+  headers: { 'x-csrf-token': csrfToken },
+  body: formData,
+});
+```
+
+---
+
+### 3.5 — CSRF Error Handler
+
+Invalid or missing tokens return **403 Forbidden** and are logged:
+
+```javascript
+app.use((err, req, res, next) => {
+  if (err.code !== 'EBADCSRFTOKEN') return next(err);
+  logger.warn('CSRF token validation failed', { path: req.path, ip: req.ip });
+  res.status(403).send(/* forbidden page */);
+});
+```
+
+---
+
+### How CSRF Protection Works
+
+```mermaid
+sequenceDiagram
+  participant Browser
+  participant Server
+
+  Browser->>Server: GET /login
+  Server->>Browser: Set-Cookie _csrf + HTML form with hidden _csrf field
+  Browser->>Server: POST /login (cookie + matching _csrf body)
+  Server->>Browser: 200 OK
+
+  Note over Browser,Server: Attacker site cannot read _csrf cookie (Same-Origin)
+  Browser->>Server: POST /login (no valid token)
+  Server->>Browser: 403 Forbidden
+```
 
 ---
 
 ## Testing & Verification
 
-### Header Verification via curl (from Kali VM)
+### CSRF — Valid Request (Browser)
 
-```bash
-curl -I http://<windows-ip>:3000
-```
-
-Output confirmed the following headers were present:
-
-```
-HTTP/1.1 200 OK
-Content-Security-Policy: default-src 'self';script-src 'self';...
-Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
-X-Frame-Options: SAMEORIGIN
-X-Content-Type-Options: nosniff
-X-DNS-Prefetch-Control: off
-Referrer-Policy: no-referrer
-```
+1. Start the app: `node app.js`
+2. Open `http://localhost:3000/login`
+3. Submit login with valid credentials → **should succeed**
 
 ---
 
-### Rate Limiting Verification
+### CSRF — Burp Suite (Forged Request)
 
-Triggered 6 rapid login requests to `/login`. After the 5th attempt, the server responded:
+1. Log in and capture a `POST /login` (or any form POST) in Burp Proxy
+2. Send to **Repeater**
+3. Remove the `_csrf` field (or replace with an invalid value)
+4. Replay the request → expect **403** with message about invalid CSRF token
 
-```
-HTTP/1.1 429 Too Many Requests
-Too many login attempts. Please try again after 15 minutes.
-```
-
----
-
-### API Key Verification
-
-Request without API key:
-
-```bash
-curl http://localhost:3000/admin/export
-# Response: 401 Unauthorized: Invalid API Key
-```
-
-Request with correct API key:
-
-```bash
-curl -H "x-api-key: your-secret-api-key-here" http://localhost:3000/admin/export
-# Response: 200 OK with data
-```
+Alternative: create a simple HTML page on another origin that auto-submits a form to your app — the browser will not include a valid token → request blocked.
 
 ---
 
-### Fail2Ban Verification
-
-After 3 failed logins, IP was banned:
+### CSRF — curl (Missing Token)
 
 ```bash
-sudo fail2ban-client status nodejs-auth
-# Banned IP list: 127.0.0.1
+curl -X POST http://localhost:3000/login \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=admin&password=test123"
 ```
+
+Expected: **403 Forbidden** (no `_csrf` cookie/token pair)
+
+---
+
+### SQLMap — No SQL Surface
+
+```bash
+sqlmap -u "http://localhost:3000/login" \
+  --data="username=test&password=test&_csrf=invalid" --batch
+```
+
+Document that the app uses JSON file storage, not SQL.
 
 ---
 
 ## Deliverables Checklist
 
-- [x] Fail2Ban installed and running on Kali Linux VM
-- [x] SSH brute-force jail configured (`maxretry=3, bantime=1hr`)
-- [x] Custom Fail2Ban filter for Node.js app login failures
-- [x] Custom Fail2Ban jail monitoring `logs/security.log`
-- [x] Alert action configured for banned IPs
-- [x] Global rate limiter applied (100 req / 15 min)
-- [x] Login-specific rate limiter applied (5 req / 15 min)
-- [x] CORS restricted to `localhost:3000`
-- [x] API key middleware protecting `/admin/export`
-- [x] `.env` file with `API_KEY` (not committed to GitHub)
-- [x] `.env` added to `.gitignore`
-- [x] Explicit CSP configured via `helmet.contentSecurityPolicy`
-- [x] HSTS configured via `helmet.hsts` (1 year, preload)
-- [x] All headers verified via `curl` from Kali VM
-- [x] Rate limiting verified (429 response after 5 attempts)
-- [x] All changes committed to `week4-6-security` branch
+- [ ] Ethical hacking report with reconnaissance findings (Kali tools)
+- [ ] SQLMap scan results documented (no SQLi on current JSON backend)
+- [x] `csurf` and `cookie-parser` installed
+- [x] CSRF middleware applied globally (`csrf({ cookie: true })`)
+- [x] Hidden `_csrf` field on all HTML forms
+- [x] `x-csrf-token` header on AJAX `/admin/import`
+- [x] 403 error handler for `EBADCSRFTOKEN`
+- [ ] Burp Suite test evidence (valid vs forged POST screenshots)
+- [x] `.env.example` notes for Week 5 CSRF testing
+- [ ] Changes committed to `week4-6-security` branch
 
 ---
 
@@ -447,25 +317,32 @@ sudo fail2ban-client status nodejs-auth
 
 ```
 user-management-app/
-├── app.js                  ← Main application with all Week 4 security
-├── .env                    ← API keys and secrets (NOT in GitHub)
-├── .gitignore              ← Excludes .env, node_modules, logs
-├── package.json
-├── logs/
-│   └── security.log        ← Winston log file monitored by Fail2Ban
-└── README.md               ← This file
+├── app.js                  ← Week 4 hardening + Week 5 CSRF (csurf)
+├── .env                    ← Secrets (NOT in GitHub)
+├── .env.example            ← JWT_SECRET, API_KEY, CSRF notes
+├── .gitignore
+├── package.json            ← includes csurf, cookie-parser
+├── package-lock.json
+├── users.json              ← Local user data (gitignored — never commit)
+├── users.json.example      ← Safe template for cloning the repo
+├── security.log            ← Winston security events (gitignored)
+├── public/
+│   └── css/style.css
+└── README.md               ← This file (Week 5)
 ```
 
 ---
 
 ## Key Security Notes
 
-> **JWT Token:** JWT is generated on login but route-level authentication currently uses a server-side `currentUser` variable. This is a known limitation documented for future improvement. API key authentication has been applied to sensitive admin endpoints as a compensating control.
+> **CSRF vs CORS:** CORS blocks *reading* cross-origin responses; CSRF blocks *unauthorized state-changing requests* from other sites. Both are required for defense in depth.
 
-> **HTTPS:** HSTS header is configured and active. Full HTTPS enforcement requires an SSL certificate which is outside the scope of the local development environment used in this internship.
+> **csurf maintenance:** The `csurf` package is archived but used here because the internship task explicitly requires it. For new production projects, consider maintained alternatives (e.g. `csrf-csrf`).
 
-> **Fail2Ban Scope:** Fail2Ban is deployed on the Kali Linux VM where the Node.js app is running during security testing. In a production deployment, it would be installed on the application server itself.
+> **Session model:** Route protection still relies on server-side `currentUser`. JWT is issued on login; full JWT middleware on all routes remains a future improvement.
+
+> **No SQL database:** SQL injection mitigations (prepared statements) apply when/if a SQL backend is integrated. Current storage is `users.json`.
 
 ---
 
-_DeveloperHub Cybersecurity Internship — Week 4_
+_DeveloperHub Cybersecurity Internship — Week 5_
