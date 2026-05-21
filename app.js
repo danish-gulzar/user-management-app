@@ -8,6 +8,8 @@ const winston = require('winston');
 const rateLimit = require('express-rate-limit');
 const cors = require('cors');
 
+const COOKIE_SECRET = process.env.COOKIE_SECRET || 'your-cookie-secret-change-in-production';
+
 const logger = winston.createLogger({
   transports: [
     new winston.transports.Console(),
@@ -52,10 +54,10 @@ app.set('view engine', 'ejs');
 const cookieParser = require('cookie-parser');
 const csrf = require('csurf');
 
-app.use(cookieParser());
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(csrf({ cookie: true }));
+app.use(cookieParser(COOKIE_SECRET));
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(csrf({ cookie: { httpOnly: true, sameSite: 'strict', secure: process.env.NODE_ENV === 'production' } }));
 
 // WEEK 5: Embed hidden _csrf field in HTML forms served to the browser
 function getCsrfField(req) {
@@ -79,9 +81,10 @@ const loginLimiter = rateLimit({
 app.use(globalLimiter);
 
 const corsOptions = {
-  origin: 'http://localhost:3000',
+  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
   methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key']
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'x-csrf-token'],
+  credentials: true
 };
 
 app.use(cors(corsOptions));
@@ -121,27 +124,26 @@ function saveUsers(usersArray) {
 
 // In-memory "database" (synced with file)
 let users = loadUsers();
-let currentUser = null; // Simple session tracking (VULNERABILITY: no secure session)
 
 // Helper: Generate avatar initials
 function getInitials(username) {
-  return username.charAt(0).toUpperCase();
+  return username && username.length > 0 ? username.charAt(0).toUpperCase() : '?';
 }
 
 // Helper: Get navbar HTML
-function getNavbar() {
-  if (currentUser) {
+function getNavbar(user) {
+  if (user) {
     return `
       <nav class="navbar">
         <a href="/" class="navbar-brand">UserManager</a>
         <div class="navbar-links">
           <a href="/">Home</a>
           <a href="/dashboard">Dashboard</a>
-          <a href="/profile?user=${currentUser.username}">Profile</a>
-          ${currentUser.isAdmin ? '<a href="/admin">Admin</a>' : ''}
+          <a href="/profile?user=${user.username}">Profile</a>
+          ${user.isAdmin ? '<a href="/admin">Admin</a>' : ''}
           <div class="navbar-user">
-            <div class="navbar-avatar">${getInitials(currentUser.username)}</div>
-            <span>${currentUser.username}</span>
+            <div class="navbar-avatar">${getInitials(user.username)}</div>
+            <span>${user.username}</span>
           </div>
           <a href="/logout" class="btn btn-secondary btn-small">Logout</a>
         </div>
@@ -162,15 +164,16 @@ function getNavbar() {
 
 // DASHBOARD (for logged-in users)
 app.get('/dashboard', (req, res) => {
-  if (!currentUser) {
+  if (!req.user) {
     return res.redirect('/login');
   }
 
+  const sortedUsers = [...users].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   const userStats = {
     totalUsers: users.length,
-    myRank: users.findIndex(u => u.createdAt <= currentUser.createdAt) + 1,
-    daysSinceJoined: Math.floor((Date.now() - new Date(currentUser.createdAt)) / (1000 * 60 * 60 * 24)),
-    profileComplete: !!currentUser.bio && !!currentUser.email
+    myRank: sortedUsers.findIndex(u => u.username === req.user.username) + 1,
+    daysSinceJoined: Math.floor((Date.now() - new Date(req.user.createdAt)) / (1000 * 60 * 60 * 24)),
+    profileComplete: !!req.user.bio && !!req.user.email
   };
 
   res.send(`<!DOCTYPE html>
@@ -182,11 +185,11 @@ app.get('/dashboard', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="dashboard-container">
     <div class="dashboard-header">
       <h1>My Dashboard</h1>
-      <p>Welcome back, ${currentUser.username}!</p>
+      <p>Welcome back, ${req.user.username}!</p>
     </div>
 
     <div class="dashboard-stats">
@@ -216,7 +219,7 @@ app.get('/dashboard', (req, res) => {
       <div class="dashboard-card">
         <h3>Quick Actions</h3>
         <div class="quick-actions">
-          <a href="/profile?user=${currentUser.username}" class="action-btn">
+          <a href="/profile?user=${req.user.username}" class="action-btn">
             <span class="action-icon">👁️</span>
             <span>View Profile</span>
           </a>
@@ -236,29 +239,29 @@ app.get('/dashboard', (req, res) => {
         <div class="account-info">
           <div class="info-row">
             <span class="info-label">Username:</span>
-            <span class="info-value">${currentUser.username}</span>
+            <span class="info-value">${req.user.username}</span>
           </div>
           <div class="info-row">
             <span class="info-label">Email:</span>
-            <span class="info-value">${currentUser.email}</span>
+            <span class="info-value">${req.user.email}</span>
           </div>
           <div class="info-row">
             <span class="info-label">Role:</span>
-            <span class="info-value" style="color: ${currentUser.isAdmin ? '#a5b4fc' : '#888'}">${currentUser.isAdmin ? 'Admin' : 'User'}</span>
+            <span class="info-value" style="color: ${req.user.isAdmin ? '#a5b4fc' : '#888'}">${req.user.isAdmin ? 'Admin' : 'User'}</span>
           </div>
           <div class="info-row">
             <span class="info-label">Member Since:</span>
-            <span class="info-value">${new Date(currentUser.createdAt).toLocaleDateString()}</span>
+            <span class="info-value">${new Date(req.user.createdAt).toLocaleDateString()}</span>
           </div>
           <div class="info-row">
             <span class="info-label">Last Login:</span>
-            <span class="info-value">${currentUser.lastLogin ? new Date(currentUser.lastLogin).toLocaleString() : 'First login'}</span>
+            <span class="info-value">${req.user.lastLogin ? new Date(req.user.lastLogin).toLocaleString() : 'First login'}</span>
           </div>
         </div>
       </div>
     </div>
 
-    ${currentUser.isAdmin ? `
+    ${req.user.isAdmin ? `
     <div class="dashboard-card admin-quick">
       <h3>Admin Quick Access</h3>
       <p style="color: #888; margin-bottom: 15px;">Jump to the admin dashboard to manage users.</p>
@@ -281,7 +284,7 @@ app.get('/', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <h1>Welcome</h1>
@@ -307,7 +310,7 @@ app.get('/register', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <h2>Create Account</h2>
@@ -379,6 +382,11 @@ app.post('/register', async (req, res) => {
     isAdmin: false
   };
 
+  // Check for duplicate username
+  if (users.some(u => u.username === username)) {
+    return res.status(400).send('Username already exists');
+  }
+
   // Make first user admin automatically
   if (users.length === 0) {
     newUser.isAdmin = true;
@@ -394,7 +402,7 @@ app.post('/register', async (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <div class="message success">User ${username} registered successfully!</div>
@@ -419,7 +427,7 @@ app.get('/login', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <h2>Login</h2>
@@ -448,6 +456,24 @@ app.get('/login', (req, res) => {
 const jwt = require('jsonwebtoken');
 const SECRET_KEY = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
+// Auth middleware: verify JWT from cookie and attach user to req
+const authMiddleware = (req, res, next) => {
+  const token = req.cookies.token;
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, SECRET_KEY);
+      req.user = users.find(u => u.username === decoded.username) || null;
+    } catch {
+      req.user = null;
+    }
+  } else {
+    req.user = null;
+  }
+  next();
+};
+
+app.use(authMiddleware);
+
 // WEEK 5: csurf validates the _csrf token before this handler runs
 app.post('/login', loginLimiter, async (req, res) => {
   const { username, password } = req.body;
@@ -463,7 +489,7 @@ app.post('/login', loginLimiter, async (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <div class="message error">Invalid credentials</div>
@@ -489,7 +515,7 @@ app.post('/login', loginLimiter, async (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <div class="message error">Invalid credentials</div>
@@ -503,7 +529,7 @@ app.post('/login', loginLimiter, async (req, res) => {
 </html>`);
   }
 
-  currentUser = user;
+  req.user = user;
   user.lastLogin = new Date().toISOString();
 
   // VULNERABILITY 4 Fixed: Issue a signed JWT token for session management
@@ -512,6 +538,7 @@ app.post('/login', loginLimiter, async (req, res) => {
     SECRET_KEY,
     { expiresIn: '1h' }
   );
+  res.cookie('token', token, { httpOnly: true, sameSite: 'strict', maxAge: 3600000 });
 
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -522,7 +549,7 @@ app.post('/login', loginLimiter, async (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <div class="message success">Welcome back, ${username}!</div>
@@ -540,7 +567,8 @@ app.post('/login', loginLimiter, async (req, res) => {
 
 // LOGOUT
 app.get('/logout', (req, res) => {
-  currentUser = null;
+  req.user = null;
+  res.clearCookie('token');
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -550,7 +578,7 @@ app.get('/logout', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <div class="message success">You have been logged out</div>
@@ -580,7 +608,7 @@ app.get('/profile', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <div class="message error">User not found</div>
@@ -602,7 +630,7 @@ app.get('/profile', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <h2>User Profile</h2>
@@ -646,7 +674,7 @@ app.get('/profile', (req, res) => {
 
 // EDIT PROFILE
 app.get('/profile/edit', (req, res) => {
-  if (!currentUser) {
+  if (!req.user) {
     return res.redirect('/login');
   }
   res.send(`<!DOCTYPE html>
@@ -658,7 +686,7 @@ app.get('/profile/edit', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <h2>Edit Profile</h2>
@@ -666,16 +694,16 @@ app.get('/profile/edit', (req, res) => {
         ${getCsrfField(req)}
         <div class="form-group">
           <label for="email">Email</label>
-          <input type="email" id="email" name="email" value="${currentUser.email}" required>
+          <input type="email" id="email" name="email" value="${req.user.email}" required>
         </div>
         <div class="form-group">
           <label for="bio">Bio</label>
-          <input type="text" id="bio" name="bio" value="${currentUser.bio || ''}">
+          <input type="text" id="bio" name="bio" value="${req.user.bio || ''}">
         </div>
         <button type="submit" class="btn btn-primary">Save Changes</button>
       </form>
       <div class="back-link">
-        <a href="/profile?user=${currentUser.username}">Cancel</a>
+        <a href="/profile?user=${req.user.username}">Cancel</a>
       </div>
     </div>
   </div>
@@ -684,13 +712,13 @@ app.get('/profile/edit', (req, res) => {
 });
 
 app.post('/profile/edit', (req, res) => {
-  if (!currentUser) {
+  if (!req.user) {
     return res.redirect('/login');
   }
   const { email, bio } = req.body;
-  currentUser.email = email;
+  req.user.email = email;
   // VULNERABILITY 5 Fixed: Also sanitize bio on profile edit to prevent XSS
-  currentUser.bio = validator.escape(bio || '');
+  req.user.bio = validator.escape(bio || '');
   saveUsers(users);
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -701,12 +729,12 @@ app.post('/profile/edit', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <div class="message success">Profile updated successfully!</div>
       <div class="links">
-        <a href="/profile?user=${currentUser.username}" class="btn btn-primary">View Profile</a>
+        <a href="/profile?user=${req.user.username}" class="btn btn-primary">View Profile</a>
         <a href="/" class="btn btn-secondary">Back to Home</a>
       </div>
     </div>
@@ -717,7 +745,7 @@ app.post('/profile/edit', (req, res) => {
 
 // CHANGE PASSWORD
 app.get('/password/change', (req, res) => {
-  if (!currentUser) {
+  if (!req.user) {
     return res.redirect('/login');
   }
   res.send(`<!DOCTYPE html>
@@ -729,7 +757,7 @@ app.get('/password/change', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <h2>Change Password</h2>
@@ -750,7 +778,7 @@ app.get('/password/change', (req, res) => {
         <button type="submit" class="btn btn-primary">Change Password</button>
       </form>
       <div class="back-link">
-        <a href="/profile?user=${currentUser.username}">Cancel</a>
+        <a href="/profile?user=${req.user.username}">Cancel</a>
       </div>
     </div>
   </div>
@@ -759,12 +787,12 @@ app.get('/password/change', (req, res) => {
 });
 
 app.post('/password/change', async (req, res) => {
-  if (!currentUser) {
+  if (!req.user) {
     return res.redirect('/login');
   }
   const { currentPassword, newPassword, confirmPassword } = req.body;
   // VULNERABILITY: Plain text password comparison — fixed to use bcrypt.compare()
-  const isMatch = await bcrypt.compare(currentPassword, currentUser.password);
+  const isMatch = await bcrypt.compare(currentPassword, req.user.password);
   if (!isMatch) {
     return res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -775,13 +803,13 @@ app.post('/password/change', async (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <div class="message error">Current password is incorrect</div>
       <div class="links">
         <a href="/password/change" class="btn btn-primary">Try Again</a>
-        <a href="/profile?user=${currentUser.username}" class="btn btn-secondary">Back to Profile</a>
+        <a href="/profile?user=${req.user.username}" class="btn btn-secondary">Back to Profile</a>
       </div>
     </div>
   </div>
@@ -798,13 +826,13 @@ app.post('/password/change', async (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <div class="message error">New passwords do not match</div>
       <div class="links">
         <a href="/password/change" class="btn btn-primary">Try Again</a>
-        <a href="/profile?user=${currentUser.username}" class="btn btn-secondary">Back to Profile</a>
+        <a href="/profile?user=${req.user.username}" class="btn btn-secondary">Back to Profile</a>
       </div>
     </div>
   </div>
@@ -812,7 +840,7 @@ app.post('/password/change', async (req, res) => {
 </html>`);
   }
   // VULNERABILITY: Password stored in plain text — fixed to hash before saving
-  currentUser.password = await bcrypt.hash(newPassword, 10);
+  req.user.password = await bcrypt.hash(newPassword, 10);
   saveUsers(users);
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -823,12 +851,12 @@ app.post('/password/change', async (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <div class="message success">Password changed successfully!</div>
       <div class="links">
-        <a href="/profile?user=${currentUser.username}" class="btn btn-primary">Back to Profile</a>
+        <a href="/profile?user=${req.user.username}" class="btn btn-primary">Back to Profile</a>
         <a href="/" class="btn btn-secondary">Back to Home</a>
       </div>
     </div>
@@ -839,7 +867,7 @@ app.post('/password/change', async (req, res) => {
 
 // ADMIN DASHBOARD
 app.get('/admin', (req, res) => {
-  if (!currentUser || !currentUser.isAdmin) {
+  if (!req.user || !req.user.isAdmin) {
     return res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -849,7 +877,7 @@ app.get('/admin', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <div class="message error">Access denied. Admin privileges required.</div>
@@ -863,6 +891,7 @@ app.get('/admin', (req, res) => {
   }
 
   const searchTerm = req.query.search || '';
+  const escapedSearchTerm = validator.escape(searchTerm);
   const filteredUsers = searchTerm
     ? users.filter(u => u.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
                         u.email.toLowerCase().includes(searchTerm.toLowerCase()))
@@ -878,7 +907,7 @@ app.get('/admin', (req, res) => {
   <meta name="csrf-token" content="${req.csrfToken()}">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="admin-container">
     <div class="admin-header">
       <div>
@@ -893,7 +922,7 @@ app.get('/admin', (req, res) => {
     </div>
 
     <form class="search-bar" method="GET" action="/admin">
-      <input type="text" name="search" placeholder="Search by username or email..." value="${searchTerm}">
+      <input type="text" name="search" placeholder="Search by username or email..." value="${escapedSearchTerm}">
       <button type="submit" class="btn btn-primary">Search</button>
       ${searchTerm ? '<a href="/admin" class="btn btn-secondary">Clear</a>' : ''}
     </form>
@@ -961,29 +990,13 @@ app.get('/admin', (req, res) => {
   </div>
 </body>
 </html>
-<script>
-function importUsers(input) {
-  const file = input.files[0];
-  if (!file) return;
-  const formData = new FormData();
-  formData.append('file', file);
-  const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
-  fetch('/admin/import', {
-    method: 'POST',
-    headers: { 'x-csrf-token': csrfToken },
-    body: formData
-  })
-    .then(r => r.text())
-    .then(html => { document.open(); document.write(html); document.close(); })
-    .catch(e => alert('Import failed: ' + e));
-}
-</script>
+<script src="/js/admin.js"></script>
 `);
 });
 
 // DELETE USER CONFIRMATION
 app.get('/admin/users/:username/delete', (req, res) => {
-  if (!currentUser || !currentUser.isAdmin) {
+  if (!req.user || !req.user.isAdmin) {
     return res.redirect('/login');
   }
   const user = users.find(u => u.username === req.params.username);
@@ -997,7 +1010,7 @@ app.get('/admin/users/:username/delete', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="admin-container" style="margin-top: 80px;">
     <div class="container">
       <div class="card">
@@ -1018,7 +1031,7 @@ app.get('/admin/users/:username/delete', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="admin-container" style="margin-top: 80px;">
     <div class="container">
       <div class="card confirm-card">
@@ -1046,11 +1059,16 @@ app.get('/admin/users/:username/delete', (req, res) => {
 });
 
 app.post('/admin/users/:username/delete', (req, res) => {
-  if (!currentUser || !currentUser.isAdmin) {
+  if (!req.user || !req.user.isAdmin) {
     return res.redirect('/login');
   }
   const username = req.params.username;
+  const deletedSelf = req.user && req.user.username === username;
   users = users.filter(u => u.username !== username);
+  if (deletedSelf) {
+    req.user = null;
+    res.clearCookie('token');
+  }
   saveUsers(users);
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -1061,7 +1079,7 @@ app.post('/admin/users/:username/delete', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="admin-container" style="margin-top: 80px;">
     <div class="container">
       <div class="card">
@@ -1079,7 +1097,7 @@ app.post('/admin/users/:username/delete', (req, res) => {
 
 // EDIT USER
 app.get('/admin/users/:username/edit', (req, res) => {
-  if (!currentUser || !currentUser.isAdmin) {
+  if (!req.user || !req.user.isAdmin) {
     return res.redirect('/login');
   }
   const user = users.find(u => u.username === req.params.username);
@@ -1093,7 +1111,7 @@ app.get('/admin/users/:username/edit', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="admin-container" style="margin-top: 80px;">
     <div class="container">
       <div class="card">
@@ -1114,7 +1132,7 @@ app.get('/admin/users/:username/edit', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="admin-container" style="margin-top: 80px;">
     <div class="container">
       <div class="card">
@@ -1159,7 +1177,7 @@ app.get('/admin/users/:username/edit', (req, res) => {
 });
 
 app.post('/admin/users/:username/edit', async (req, res) => {
-  if (!currentUser || !currentUser.isAdmin) {
+  if (!req.user || !req.user.isAdmin) {
     return res.redirect('/login');
   }
   const { username, email, password, bio, isAdmin } = req.body;
@@ -1174,7 +1192,7 @@ app.post('/admin/users/:username/edit', async (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="admin-container" style="margin-top: 80px;">
     <div class="container">
       <div class="card">
@@ -1191,12 +1209,12 @@ app.post('/admin/users/:username/edit', async (req, res) => {
   if (password) {
     user.password = await bcrypt.hash(password, 10); // Fixed: hash password before saving
   }
-  user.bio = bio;
+  user.bio = validator.escape(bio || '');
   user.isAdmin = isAdmin === 'true';
-  // BUG FIX: If admin edits their own account, update currentUser reference
+  // BUG FIX: If admin edits their own account, update req.user reference
   // so the navbar and session reflect the new data immediately
-  if (currentUser && currentUser.username === req.params.username) {
-    currentUser = user;
+  if (req.user && req.user.username === req.params.username) {
+    req.user = user;
   }
   saveUsers(users);
   res.send(`<!DOCTYPE html>
@@ -1208,7 +1226,7 @@ app.post('/admin/users/:username/edit', async (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="admin-container" style="margin-top: 80px;">
     <div class="container">
       <div class="card">
@@ -1228,7 +1246,7 @@ app.post('/admin/users/:username/edit', async (req, res) => {
 // BUG FIX: This route MUST be declared before /admin/users/:username/edit
 // Otherwise Express matches 'add' as the :username param and never reaches this handler
 app.get('/admin/users/add', (req, res) => {
-  if (!currentUser || !currentUser.isAdmin) {
+  if (!req.user || !req.user.isAdmin) {
     return res.redirect('/login');
   }
   res.send(`<!DOCTYPE html>
@@ -1240,7 +1258,7 @@ app.get('/admin/users/add', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="admin-container" style="margin-top: 80px;">
     <div class="container">
       <div class="card">
@@ -1291,7 +1309,7 @@ app.get('/admin/users/add', (req, res) => {
 });
 
 app.post('/admin/users/add', async (req, res) => {
-  if (!currentUser || !currentUser.isAdmin) {
+  if (!req.user || !req.user.isAdmin) {
     return res.redirect('/login');
   }
   const { username, email, password, confirmPassword, bio, isAdmin } = req.body;
@@ -1307,7 +1325,7 @@ app.post('/admin/users/add', async (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="admin-container" style="margin-top: 80px;">
     <div class="container">
       <div class="card">
@@ -1334,7 +1352,7 @@ app.post('/admin/users/add', async (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="admin-container" style="margin-top: 80px;">
     <div class="container">
       <div class="card">
@@ -1355,7 +1373,7 @@ app.post('/admin/users/add', async (req, res) => {
     email,
     username,
     password: hashedPassword,
-    bio: bio || '',
+    bio: validator.escape(bio || ''),
     createdAt: new Date().toISOString(),
     lastLogin: null,
     isAdmin: isAdmin === 'true'
@@ -1373,7 +1391,7 @@ app.post('/admin/users/add', async (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="admin-container" style="margin-top: 80px;">
     <div class="container">
       <div class="card">
@@ -1391,13 +1409,12 @@ app.post('/admin/users/add', async (req, res) => {
 
 // EXPORT USERS
 
-// NOTE: apiKeyAuth is applied here for programmatic/API access.
-// Browser-based export links from the admin dashboard include the API key via the
-// x-api-key header set by the fetch call, but direct <a href> clicks won't work with
-// apiKeyAuth. For the demo, the export route is accessible to authenticated admins.
+// Export supports dual auth: session (browser) or API key (programmatic)
 app.get('/admin/export', (req, res) => {
-  if (!currentUser || !currentUser.isAdmin) {
-    return res.redirect('/login');
+  const apiKey = req.headers['x-api-key'];
+  const isAuthenticated = (req.user && req.user.isAdmin) || (apiKey && apiKey === process.env.API_KEY);
+  if (!isAuthenticated) {
+    return res.status(401).json({ message: 'Unauthorized: login or provide a valid API key' });
   }
   const format = req.query.format || 'json';
   if (format === 'csv') {
@@ -1415,7 +1432,7 @@ app.get('/admin/export', (req, res) => {
 // IMPORT USERS
 // WEEK 5: AJAX import sends x-csrf-token header (see admin dashboard importUsers script)
 app.post('/admin/import', (req, res) => {
-  if (!currentUser || !currentUser.isAdmin) {
+  if (!req.user || !req.user.isAdmin) {
     return res.redirect('/login');
   }
   // VULNERABILITY: No file validation, no size limits
@@ -1443,7 +1460,7 @@ app.post('/admin/import', (req, res) => {
               for (const line of lines) {
                 const [username, email, bio, createdAt, lastLogin, isAdmin] = line.match(/"([^"]*)"/g)?.map(s => s.slice(1, -1)) || [];
                 if (username) {
-                  importedUsers.push({ username, email, bio: bio || '', createdAt: createdAt || new Date().toISOString(), lastLogin: lastLogin || null, isAdmin: isAdmin === 'true', password: 'imported123' });
+                  importedUsers.push({ username, email, bio: validator.escape(bio || ''), createdAt: createdAt || new Date().toISOString(), lastLogin: lastLogin || null, isAdmin: isAdmin === 'true', password: 'imported123' });
                 }
               }
             }
@@ -1465,7 +1482,7 @@ app.post('/admin/import', (req, res) => {
                 importedUsers.push({
                   username: parts[0],
                   email: parts[1] || '',
-                  bio: parts[2] || '',
+                  bio: validator.escape(parts[2] || ''),
                   createdAt: parts[3] || new Date().toISOString(),
                   lastLogin: parts[4] || null,
                   isAdmin: parts[5] === 'true',
@@ -1480,6 +1497,7 @@ app.post('/admin/import', (req, res) => {
         if (!u.createdAt) u.createdAt = new Date().toISOString();
         if (!u.password) u.password = 'imported123'; // VULNERABILITY: Default password
         if (!('isAdmin' in u)) u.isAdmin = false;
+        if (u.bio) u.bio = validator.escape(u.bio);
         users.push(u);
       }
       saveUsers(users);
@@ -1492,7 +1510,7 @@ app.post('/admin/import', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="admin-container" style="margin-top: 80px;">
     <div class="container">
       <div class="card">
@@ -1515,7 +1533,7 @@ app.post('/admin/import', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="admin-container" style="margin-top: 80px;">
     <div class="container">
       <div class="card">
@@ -1534,7 +1552,7 @@ app.post('/admin/import', (req, res) => {
 
 // RESET ALL USERS
 app.get('/admin/reset-all', (req, res) => {
-  if (!currentUser || !currentUser.isAdmin) {
+  if (!req.user || !req.user.isAdmin) {
     return res.redirect('/login');
   }
   res.send(`<!DOCTYPE html>
@@ -1546,7 +1564,7 @@ app.get('/admin/reset-all', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="admin-container" style="margin-top: 80px;">
     <div class="container">
       <div class="card confirm-card">
@@ -1573,12 +1591,13 @@ app.get('/admin/reset-all', (req, res) => {
 });
 
 app.post('/admin/reset-all', (req, res) => {
-  if (!currentUser || !currentUser.isAdmin) {
+  if (!req.user || !req.user.isAdmin) {
     return res.redirect('/login');
   }
   const count = users.length;
   users = [];
-  currentUser = null;
+  req.user = null;
+  res.clearCookie('token');
   saveUsers(users);
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -1589,7 +1608,7 @@ app.post('/admin/reset-all', (req, res) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="admin-container" style="margin-top: 80px;">
     <div class="container">
       <div class="card">
@@ -1620,7 +1639,7 @@ app.use((err, req, res, next) => {
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  ${getNavbar()}
+  ${getNavbar(req.user)}
   <div class="container" style="margin-top: 80px;">
     <div class="card">
       <div class="message error">Invalid or missing CSRF token. This request was blocked to prevent cross-site request forgery.</div>
