@@ -3,6 +3,55 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
+const { execSync } = require('child_process');
+
+// ============================================
+// SSL / HTTPS SETUP
+// ============================================
+const SSL_DIR = path.join(__dirname, 'ssl');
+const SSL_KEY = path.join(SSL_DIR, 'key.pem');
+const SSL_CERT = path.join(SSL_DIR, 'cert.pem');
+
+function findOpenSSL() {
+  const candidates = [
+    'openssl',
+    'C:\\Program Files\\Git\\usr\\bin\\openssl.exe',
+    'C:\\Program Files (x86)\\Git\\usr\\bin\\openssl.exe',
+    path.join(process.env.LOCALAPPDATA || '', 'Programs\\Git\\usr\\bin\\openssl.exe'),
+    path.join(process.env.ProgramFiles || '', 'OpenSSL-Win64\\bin\\openssl.exe'),
+    path.join(process.env['ProgramFiles(x86)'] || '', 'OpenSSL-Win32\\bin\\openssl.exe'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      execSync(`"${candidate}" version`, { stdio: 'pipe' });
+      return candidate;
+    } catch {}
+  }
+  return null;
+}
+
+if (!fs.existsSync(SSL_KEY) || !fs.existsSync(SSL_CERT)) {
+  const openssl = findOpenSSL();
+  if (openssl) {
+    try {
+      if (!fs.existsSync(SSL_DIR)) { fs.mkdirSync(SSL_DIR, { recursive: true }); }
+      console.log('Generating self-signed SSL certificates...');
+      execSync(
+        `"${openssl}" req -x509 -newkey rsa:2048 -keyout "${SSL_KEY}" -out "${SSL_CERT}" -days 365 -nodes -subj "/CN=localhost"`,
+        { stdio: 'pipe' }
+      );
+      console.log('SSL certificates generated successfully.');
+    } catch (err) {
+      console.warn('Could not generate SSL certificates:', err.message);
+    }
+  } else {
+    console.warn('OpenSSL not found. SSL certificates cannot be auto-generated.');
+    console.warn('Install Git for Windows (includes OpenSSL) or run: scripts\\generate-certs.ps1');
+  }
+}
+
+const useHttps = fs.existsSync(SSL_KEY) && fs.existsSync(SSL_CERT);
 const winston = require('winston');
 
 const rateLimit = require('express-rate-limit');
@@ -14,7 +63,7 @@ const { generateCsrfToken, doubleCsrfProtection } = doubleCsrf({
   getSecret: () => process.env.CSRF_SECRET || 'csrf-secret-change-in-production',
   getSessionIdentifier: (req) => req.cookies.token || req.ip,
   cookieName: process.env.NODE_ENV === 'production' ? "__Host-psifi.x-csrf-token" : "psifi.x-csrf-token",
-  cookieOptions: { sameSite: "strict", secure: process.env.NODE_ENV === 'production' },
+  cookieOptions: { sameSite: "strict", secure: useHttps },
   getCsrfTokenFromRequest: (req) => req.body._csrf || req.headers["x-csrf-token"],
 });
 
@@ -89,7 +138,7 @@ const loginLimiter = rateLimit({
 app.use(globalLimiter);
 
 const corsOptions = {
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  origin: process.env.CORS_ORIGIN || (useHttps ? 'https://localhost:3000' : 'http://localhost:3000'),
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'x-csrf-token'],
   credentials: true
@@ -539,7 +588,7 @@ app.post('/login', loginLimiter, async (req, res) => {
     SECRET_KEY,
     { expiresIn: '1h' }
   );
-  res.cookie('token', token, { httpOnly: true, sameSite: 'strict', secure: process.env.NODE_ENV === 'production', maxAge: 3600000 });
+  res.cookie('token', token, { httpOnly: true, sameSite: 'strict', secure: useHttps, maxAge: 3600000 });
 
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -1796,7 +1845,30 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  logger.info(`Application started on port ${PORT}`);
-  console.log(`App running at http://localhost:${PORT}`);
-});
+const HTTP_PORT = process.env.HTTP_PORT || 3001;
+
+if (useHttps) {
+  const sslOptions = {
+    key: fs.readFileSync(SSL_KEY),
+    cert: fs.readFileSync(SSL_CERT)
+  };
+  https.createServer(sslOptions, app).listen(PORT, () => {
+    logger.info(`Application started on port ${PORT} (HTTPS)`);
+    console.log(`App running at https://localhost:${PORT}`);
+  });
+  // Redirect HTTP to HTTPS
+  const httpApp = express();
+  httpApp.use((req, res) => {
+    const host = req.headers.host?.replace(/:\d+$/, '') || 'localhost';
+    res.redirect(301, `https://${host}:${PORT}${req.url}`);
+  });
+  httpApp.listen(HTTP_PORT, () => {
+    console.log(`HTTP redirect running on http://localhost:${HTTP_PORT} -> https://localhost:${PORT}`);
+  });
+} else {
+  app.listen(PORT, () => {
+    logger.info(`Application started on port ${PORT} (HTTP - no SSL)`);
+    console.log(`App running at http://localhost:${PORT}`);
+    console.log('WARNING: Credentials will be sent in plaintext. Enable HTTPS for security.');
+  });
+}

@@ -1,6 +1,5 @@
 # Week 6 — Advanced Security Audits & Final Deployment
 
-
 Live Demo: https://user-management-app-370f.onrender.com
 ---
 
@@ -550,6 +549,17 @@ user-management-app/
 
 ---
 
+## Quick Start
+
+```bash
+npm install
+npm start  # Auto-generates SSL certs via OpenSSL; app runs on https://localhost:3000
+```
+
+> **HTTPS:** On startup, the app auto-generates self-signed SSL certificates using OpenSSL (included with Git for Windows). The app serves all traffic over HTTPS on port 3000. HTTP requests on port 3001 are redirected to HTTPS. For production, replace with certificates from a trusted CA (Let's Encrypt).
+
+---
+
 ## Key Security Notes
 
 > **Defense in depth:** The application uses multiple overlapping security controls — CSP restricts what scripts run, CSRF prevents forged requests, CORS blocks cross-origin reads, rate limiting prevents brute force, and bcrypt protects stored passwords.
@@ -562,7 +572,7 @@ user-management-app/
 
 > **Residual risks:**
 > - File-based storage (`users.json`) — no ACID guarantees; consider PostgreSQL in production
-> - No HTTPS termination — use a reverse proxy (nginx, Caddy) with Let's Encrypt
+> - Self-signed certificates in development — use a trusted CA (Let's Encrypt) in production
 > - No rate limiting on registration — consider adding to prevent mass account creation
 > - No email verification — users can register with any email without confirmation
 
